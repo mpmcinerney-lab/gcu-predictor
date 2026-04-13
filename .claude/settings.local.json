@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__strava__check-strava-connection",
+      "mcp__strava__explore-segments",
+      "mcp__strava__get-segment",
+      "WebFetch(domain:www.strava.com)",
+      "WebFetch(domain:tan.sportraxs.com)",
+      "Bash(python extract_profile.py)",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}
