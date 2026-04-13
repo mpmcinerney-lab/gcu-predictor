@@ -261,20 +261,33 @@ function preRace(){
   var mH=S.mH,mM=S.mM;
   if(mH==null&&mM==null)return null;
   var mm=(mH||0)*60+(mM||0);if(mm<=0)return null;
-  var ml={novice:1.2,intermediate:1,experienced:.85},mt=ml[S.exp]||1;
-  var est=Math.max(300,Math.min(1000,mm*2.2*mt));
-  var n=PR.length,fi=CP.length-1,lo=0,hi=1;
-  if(est<=PR[0][fi]){lo=0;hi=1}
-  else if(est>=PR[n-1][fi]){lo=n-2;hi=n-1}
-  else{for(var i=0;i<n-1;i++){if(est>=PR[i][fi]&&est<=PR[i+1][fi]){lo=i;hi=i+1;break}}}
-  var rng=PR[hi][fi]-PR[lo][fi],a=rng>0?(est-PR[lo][fi])/rng:0;
+  // Calibrated from 2025 race data: real ratio ~2.4-2.5x marathon time
+  var ml={novice:1.3,intermediate:1.1,experienced:.95},mt=ml[S.exp]||1.1;
+  var mid=Math.max(300,Math.min(1000,mm*2.5*mt));
+  // Range: +/- 12% to reflect real variance between marathon and mountain ultra
+  var eLo=mid*.88,eHi=mid*1.12;
+
+  function interpPR(est){
+    var n=PR.length,fi=CP.length-1,lo=0,hi=1;
+    if(est<=PR[0][fi]){lo=0;hi=1}
+    else if(est>=PR[n-1][fi]){lo=n-2;hi=n-1}
+    else{for(var i=0;i<n-1;i++){if(est>=PR[i][fi]&&est<=PR[i+1][fi]){lo=i;hi=i+1;break}}}
+    var rng=PR[hi][fi]-PR[lo][fi],a=rng>0?(est-PR[lo][fi])/rng:0;
+    var r=[];for(var f=0;f<CP.length;f++)r[f]=PR[lo][f]+a*(PR[hi][f]-PR[lo][f]);
+    return r;
+  }
+
+  var pMid=interpPR(mid),pLo=interpPR(eLo),pHi=interpPR(eHi);
   var res={};
   for(var f=1;f<CP.length;f++){
-    var p=PR[lo][f]+a*(PR[hi][f]-PR[lo][f]);
-    p*=wMult(f-1);
-    res[f]={min:p,fut:true,ent:false,pr:true};
+    var wm=wMult(f-1);
+    res[f]={min:pMid[f]*wm,lo:pLo[f]*wm,hi:pHi[f]*wm,fut:true,ent:false,pr:true};
   }
-  res._f=null;res._lc=0;res._ef=res[CP.length-1]?res[CP.length-1].min:null;
+  var fi=CP.length-1;
+  res._f=null;res._lc=0;
+  res._ef=res[fi]?res[fi].min:null;
+  res._elo=res[fi]?res[fi].lo:null;
+  res._ehi=res[fi]?res[fi].hi:null;
   return res;
 }
 
@@ -389,7 +402,11 @@ function refresh(){
   document.getElementById('pb').style.width=pct+'%';
   document.getElementById('pd').textContent=CP[lc].km+' km ('+pct+'%)';
   var ef=res?res._ef:null;
-  document.getElementById('pf').textContent=ef?'Est. finish: '+fc(ef)+' ('+fe(ef)+')':'Awaiting split times';
+  if(res&&res._elo&&res._ehi){
+    document.getElementById('pf').textContent='Est. finish: '+fe(res._elo)+' \u2013 '+fe(res._ehi);
+  }else{
+    document.getElementById('pf').textContent=ef?'Est. finish: '+fc(ef)+' ('+fe(ef)+')':'Awaiting split times';
+  }
 
   // Fade
   var fi=document.getElementById('fi');
@@ -425,14 +442,17 @@ function refresh(){
     }else if(r.fut){
       var co=CP[i].co,cls=r.pr?'pp':'',ch='';
       if(co){
-        var buf=co-r.min;
+        var buf=co-(r.hi!=null?r.hi:r.min);
         if(buf<0){cls='po';ch='<div class="px xo">Over cutoff by '+Math.abs(Math.round(buf))+' min</div>'}
         else if(buf<30){if(!cls)cls='pw';ch='<div class="px xw">'+Math.round(buf)+' min buffer to cutoff</div>'}
         var bd=document.getElementById('cb'+i);
         if(bd)bd.className='cutoff-badge '+(buf<0?'co':buf<30?'cw':'ok');
       }
-      var lbl=r.pr?'Pre-race estimate':'Projected';
-      pe.innerHTML='<div class="pr"><span class="pt '+cls+'">'+fe(r.min)+'</span><span class="pc">'+fc(r.min)+'</span></div><div class="pn">'+lbl+'</div>'+ch;
+      if(r.pr&&r.lo!=null){
+        pe.innerHTML='<div class="pr"><span class="pt pp">'+fe(r.lo)+' \u2013 '+fe(r.hi)+'</span></div><div class="pn">Pre-race estimate range</div>'+ch;
+      }else{
+        pe.innerHTML='<div class="pr"><span class="pt '+cls+'">'+fe(r.min)+'</span><span class="pc">'+fc(r.min)+'</span></div><div class="pn">Projected</div>'+ch;
+      }
     }else{
       pe.innerHTML='<div class="pr"><span class="pt" style="color:#9ca3af;font-size:18px">'+fe(r.min)+'</span><span class="pc">'+fc(r.min)+'</span></div><div class="pn">Estimated (no split entered)</div>';
     }
