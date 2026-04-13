@@ -29,7 +29,7 @@ A web-based pace calculator for the Ultra Trail Drakensberg Giant's Cup Uncut (G
 
 - Race details: Official GCU 2026 course data (61.4 km, 2071m elevation gain, start 06:00).
 - Reference profiles: Interpolated from 2025 GCU race results and back-runner estimates.
-- Elevation profile: Derived from GPX analysis (see `gcu_gpx_analysis.py` and `extract_profile.py` for processing scripts).
+- Elevation profile: Derived from GPX analysis.
 
 ## Technical Notes
 
