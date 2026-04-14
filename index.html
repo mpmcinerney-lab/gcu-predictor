@@ -263,7 +263,6 @@ function getEnt(){
 function calcFade(ent){
   if(ent.length<2)return 0;
   var profiles = ent.map(function(e){return interp(e.cp,e.min)});
-  enforceMonotonic(profiles);
   var preds = ent.map(function(e,i){return{el:e.min,fin:profiles[i][CP.length-1]}});
   var f=preds[0],l=preds[preds.length-1],hrs=(l.el-f.el)/60;
   if(hrs<=0)return 0;
@@ -493,6 +492,7 @@ function refresh(){
   if(res&&res._f!=null&&ent.length>=2){
     var f=res._f,cls,txt,lc=res._lc;
     // Thresholds vary by checkpoint (early uncertain, late confident)
+    // IMPORTANT: negative fade means faster pacing, so "Pacing well" is always faster than "Holding steady".
     if(lc<=2){
       // Early checkpoints: wide thresholds (high interpolation uncertainty)
       if(f<-5){cls='fn';txt='Negative splitting ('+f.toFixed(1)+' min/hr)'}
