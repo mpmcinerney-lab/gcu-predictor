@@ -303,6 +303,11 @@ def _interpolate_profiles(checkpoint_index: int, elapsed_minutes: float) -> list
     in the split ratios — steep scrambles, technical descents, altitude, etc. are
     all encoded in how long each segment took relative to the whole.
 
+    Alpha is clamped to [0, 1]. Runners faster than the fastest reference profile
+    (alpha < 0) or slower than the slowest (alpha > 1) would require extrapolation
+    beyond calibrated data; clamping returns the nearest boundary profile instead,
+    which is the safest conservative estimate.
+
     Returns a list of predicted elapsed minutes at each checkpoint [0..5].
     """
     n = len(PROFILES)
@@ -321,6 +326,7 @@ def _interpolate_profiles(checkpoint_index: int, elapsed_minutes: float) -> list
 
     rng = PROFILES[hi][ci] - PROFILES[lo][ci]
     alpha = (elapsed_minutes - PROFILES[lo][ci]) / rng if rng > 0 else 0
+    alpha = max(0.0, min(1.0, alpha))  # clamp: never extrapolate beyond reference profiles
 
     return [PROFILES[lo][f] + alpha * (PROFILES[hi][f] - PROFILES[lo][f])
             for f in range(len(CHECKPOINTS))]
@@ -361,20 +367,30 @@ def _calc_fade(entries: list, profiles_fn=_interpolate_profiles) -> float:
     Method:
       1. At each entered checkpoint, compute what finish time would be predicted
          if the runner held that relative position (alpha) for the rest of the race.
-      2. If the predicted finish is increasing across checkpoints, the runner is
-         fading — their alpha is drifting toward slower profiles.
+      2. Enforce monotonicity: each successive projected finish must be >= the
+         previous one. If the raw projection decreases (artefact of piecewise-
+         linear interpolation between unevenly-spaced profiles) it is clamped to
+         the previous value, preventing a spurious "runner is improving" signal.
       3. Compute the rate of drift in minutes per hour of racing.
       4. Apply a 0.5x dampening factor (fade tends to decelerate, not continue linearly).
 
-    Returns fade rate in minutes per hour. Positive = slowing. Negative = speeding up.
+    Returns fade rate in minutes per hour. Positive = slowing. Zero = steady pace.
+    Negative values are clamped to 0 — the model has no basis for predicting
+    a runner will speed up; it can only detect and project slowing.
     """
     if len(entries) < 2:
         return 0
 
     preds = []
+    prev_fin = None
     for e in entries:
         projected = profiles_fn(e["cp"], e["min"])
-        preds.append({"elapsed": e["min"], "projected_finish": projected[-1]})
+        fin = projected[-1]
+        # Monotonic clamp: projected finish can only stay the same or increase
+        if prev_fin is not None and fin < prev_fin:
+            fin = prev_fin
+        prev_fin = fin
+        preds.append({"elapsed": e["min"], "projected_finish": fin})
 
     first, last = preds[0], preds[-1]
     hours_elapsed = (last["elapsed"] - first["elapsed"]) / 60
@@ -382,7 +398,8 @@ def _calc_fade(entries: list, profiles_fn=_interpolate_profiles) -> float:
         return 0
 
     finish_drift = last["projected_finish"] - first["projected_finish"]
-    return (finish_drift / hours_elapsed) * 0.5  # dampened
+    fade = (finish_drift / hours_elapsed) * 0.5  # dampened
+    return max(0.0, fade)  # never predict improvement
 
 
 def _hr_fade_modifier(fade: float, max_hr: Optional[int], resting_hr: Optional[int],
@@ -427,9 +444,15 @@ def _cardiac_drift(entries: list, max_hr: Optional[int]) -> float:
     """
     Detect cardiac drift: HR rising across checkpoints at similar pace.
 
-    If HR is trending upward by >5 bpm per checkpoint while pace holds steady,
-    the runner is silently accumulating fatigue. This predicts steeper fade even
-    before pace actually drops.
+    If HR is trending upward while pace holds steady, the runner is silently
+    accumulating fatigue. This predicts steeper fade even before pace drops.
+
+    Trend is expressed in bpm/hr (not bpm/checkpoint) so it is independent of
+    how many checkpoints were entered and of variable inter-checkpoint gaps.
+
+    Thresholds:
+      > 5 bpm/hr:  strong drift signal -> +0.3 min/hr extra fade
+      > 2 bpm/hr:  moderate drift      -> +0.15 min/hr extra fade
 
     Returns additional fade rate to add (min/hr).
     """
@@ -437,10 +460,14 @@ def _cardiac_drift(entries: list, max_hr: Optional[int]) -> float:
     if len(hr_entries) < 2 or not max_hr:
         return 0
 
-    trend = (hr_entries[-1]["hr"] - hr_entries[0]["hr"]) / (len(hr_entries) - 1)
-    if trend > 5:
+    elapsed_hrs = (hr_entries[-1]["min"] - hr_entries[0]["min"]) / 60.0
+    if elapsed_hrs <= 0:
+        return 0
+
+    trend_per_hr = (hr_entries[-1]["hr"] - hr_entries[0]["hr"]) / elapsed_hrs
+    if trend_per_hr > 5:
         return 0.3
-    elif trend > 3:
+    elif trend_per_hr > 2:
         return 0.15
     return 0
 
@@ -529,6 +556,10 @@ def predict(inp: PredictionInput) -> PredictionResult:
     last_hr = last.get("hr")
     fade = _hr_fade_modifier(fade, inp.max_hr, inp.resting_hr, last_hr)
     fade += _cardiac_drift(entries, inp.max_hr)
+    # Cap: a fade above 15 min/hr is physically implausible for sustained ultra running.
+    # Without this, extreme split combinations (e.g., winner pace at Swiman followed by
+    # back-of-pack Castleburn) produce runaway predictions via total_fade = fade * (remaining/60).
+    fade = min(fade, 15.0)
 
     # --- Layer 3: Terrain bias ---
     bias = _terrain_bias(entries) if len(entries) >= 2 else None
@@ -552,7 +583,7 @@ def predict(inp: PredictionInput) -> PredictionResult:
             cw = seg.climb_weight
             dw = 1 - cw
             bias_adj = cw * (-strength) + dw * strength
-            seg_base *= (1 + max(-0.03, min(0.03, bias_adj)))
+            seg_base *= (1 + max(-0.08, min(0.08, bias_adj)))
 
         # Layer 4: Weather
         seg_base *= _weather_multiplier(f - 1, inp.temperature_c, inp.trail_condition)
@@ -577,11 +608,20 @@ def predict(inp: PredictionInput) -> PredictionResult:
                 minutes=base[f], is_future=False, is_entered=False
             )
 
+    # Hard cap at the finish cutoff. Anything beyond 870 min means the runner
+    # will not finish within the official time limit regardless of exact pace.
+    finish_cutoff = CHECKPOINTS[-1].cutoff_minutes  # 870 min
     finish = predictions.get(n_cp - 1)
+    raw_finish = finish.minutes if finish else cumulative
+    capped_finish = min(raw_finish, finish_cutoff) if finish_cutoff else raw_finish
+    if finish and capped_finish < finish.minutes:
+        predictions[n_cp - 1] = CheckpointPrediction(
+            minutes=capped_finish, is_future=True, is_entered=False
+        )
     return PredictionResult(
         predictions=predictions,
         fade_rate=fade,
-        estimated_finish=finish.minutes if finish else cumulative,
+        estimated_finish=capped_finish,
     )
 
 
@@ -645,12 +685,18 @@ def _pre_race_predict(inp: PredictionInput) -> PredictionResult:
 
     n_cp = len(CHECKPOINTS)
     predictions = {}
+    # Weather must be applied to segment durations, not cumulative times.
+    # Accumulate weather-adjusted cumulative times for each variant separately.
+    cum_mid = cum_lo = cum_hi = 0.0
     for f in range(1, n_cp):
         wm = _weather_multiplier(f - 1, inp.temperature_c, inp.trail_condition)
+        cum_mid += (p_mid[f] - p_mid[f - 1]) * wm
+        cum_lo  += (p_lo[f]  - p_lo[f - 1])  * wm
+        cum_hi  += (p_hi[f]  - p_hi[f - 1])  * wm
         predictions[f] = CheckpointPrediction(
-            minutes=p_mid[f] * wm,
-            lo=p_lo[f] * wm,
-            hi=p_hi[f] * wm,
+            minutes=cum_mid,
+            lo=cum_lo,
+            hi=cum_hi,
             is_future=True,
             is_entered=False,
             is_pre_race=True,
