@@ -7,7 +7,8 @@
       "WebFetch(domain:www.strava.com)",
       "WebFetch(domain:tan.sportraxs.com)",
       "Bash(python extract_profile.py)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(cmd.exe /c \"where gh\")"
     ]
   }
 }
