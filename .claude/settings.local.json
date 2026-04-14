@@ -10,7 +10,8 @@
       "mcp__Claude_Preview__preview_start",
       "Bash(cmd.exe /c \"where gh\")",
       "Bash(python test_model.py)",
-      "Bash(python analysis/interp_analysis.py)"
+      "Bash(python analysis/interp_analysis.py)",
+      "Bash(python -c ':*)"
     ]
   }
 }

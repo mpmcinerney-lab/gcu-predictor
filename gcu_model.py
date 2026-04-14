@@ -365,41 +365,36 @@ def _calc_fade(entries: list, profiles_fn=_interpolate_profiles) -> float:
     across checkpoints relative to the reference profiles.
 
     Method:
-      1. At each entered checkpoint, compute what finish time would be predicted
-         if the runner held that relative position (alpha) for the rest of the race.
-      2. Enforce monotonicity: each successive projected finish must be >= the
-         previous one. If the raw projection decreases (artefact of piecewise-
-         linear interpolation between unevenly-spaced profiles) it is clamped to
-         the previous value, preventing a spurious "runner is improving" signal.
-      3. Compute the rate of drift in minutes per hour of racing.
-      4. Apply a 0.5x dampening factor (fade tends to decelerate, not continue linearly).
+      1. For each entered checkpoint, compute the raw projected finish (what
+         finish time would be predicted if the runner held that relative position).
+      2. Accumulate only the POSITIVE drift from each consecutive pair of entries.
+         Negative pair drifts (apparent improvement on a segment) are clamped to 0
+         per-pair, preventing spurious "runner is improving" signals.
+      3. Divide total positive drift by total elapsed hours, apply 0.5x dampening.
+
+    Per-pair comparison (not running-max) is critical: a runner who improved on
+    segment N and then faded on segment N+1 should show a fade signal relative to
+    their performance at checkpoint N — not relative to their earliest entry. A
+    running-max clamp would carry the early high baseline forward and create a
+    dead zone where genuine later-segment fading is invisible.
 
     Returns fade rate in minutes per hour. Positive = slowing. Zero = steady pace.
-    Negative values are clamped to 0 — the model has no basis for predicting
-    a runner will speed up; it can only detect and project slowing.
     """
     if len(entries) < 2:
         return 0
 
-    preds = []
-    prev_fin = None
-    for e in entries:
-        projected = profiles_fn(e["cp"], e["min"])
-        fin = projected[-1]
-        # Monotonic clamp: projected finish can only stay the same or increase
-        if prev_fin is not None and fin < prev_fin:
-            fin = prev_fin
-        prev_fin = fin
-        preds.append({"elapsed": e["min"], "projected_finish": fin})
+    fins = [profiles_fn(e["cp"], e["min"])[-1] for e in entries]
 
-    first, last = preds[0], preds[-1]
-    hours_elapsed = (last["elapsed"] - first["elapsed"]) / 60
+    # Sum positive drifts from consecutive pairs only; negative pairs contribute 0
+    total_positive_drift = sum(
+        max(0.0, fins[i + 1] - fins[i]) for i in range(len(fins) - 1)
+    )
+
+    hours_elapsed = (entries[-1]["min"] - entries[0]["min"]) / 60
     if hours_elapsed <= 0:
         return 0
 
-    finish_drift = last["projected_finish"] - first["projected_finish"]
-    fade = (finish_drift / hours_elapsed) * 0.5  # dampened
-    return max(0.0, fade)  # never predict improvement
+    return (total_positive_drift / hours_elapsed) * 0.5  # dampened; always >= 0
 
 
 def _hr_fade_modifier(fade: float, max_hr: Optional[int], resting_hr: Optional[int],

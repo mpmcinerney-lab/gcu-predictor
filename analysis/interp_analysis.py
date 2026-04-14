@@ -154,27 +154,19 @@ def densify_pr(PR_list=PR, factor=3):
 def calc_fade_from_entries(entries, interp_fn):
     """entries: list of dicts [{'cp':idx,'min':minutes}, ...]
     interp_fn: function(ci, el) -> profile list
-    Returns fade value (min/hr). Applies monotonic clamp to projected finishes
-    and floors the result at 0 to match gcu_model._calc_fade behaviour.
+    Returns fade value (min/hr). Uses per-pair positive drift accumulation
+    to match gcu_model._calc_fade behaviour.
     """
     if len(entries) < 2:
         return 0.0
-    preds = []
-    prev_fin = None
-    for e in entries:
-        profile = interp_fn(e['cp'], e['min'])
-        fin = profile[-1]
-        if prev_fin is not None and fin < prev_fin:
-            fin = prev_fin
-        prev_fin = fin
-        preds.append({'el': e['min'], 'fin': fin})
-    f = preds[0]
-    l = preds[-1]
-    hrs = (l['el'] - f['el']) / 60.0
+    fins = [interp_fn(e['cp'], e['min'])[-1] for e in entries]
+    total_positive_drift = sum(
+        max(0.0, fins[i + 1] - fins[i]) for i in range(len(fins) - 1)
+    )
+    hrs = (entries[-1]['min'] - entries[0]['min']) / 60.0
     if hrs <= 0:
         return 0.0
-    fade = ((l['fin'] - f['fin']) / hrs) * 0.5
-    return max(0.0, fade)
+    return (total_positive_drift / hrs) * 0.5
 
 
 def enforce_monotonic_profiles(profiles, eps=1e-6):
