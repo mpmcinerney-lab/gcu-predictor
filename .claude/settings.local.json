@@ -8,7 +8,9 @@
       "WebFetch(domain:tan.sportraxs.com)",
       "Bash(python extract_profile.py)",
       "mcp__Claude_Preview__preview_start",
-      "Bash(cmd.exe /c \"where gh\")"
+      "Bash(cmd.exe /c \"where gh\")",
+      "Bash(python test_model.py)",
+      "Bash(python analysis/interp_analysis.py)"
     ]
   }
 }

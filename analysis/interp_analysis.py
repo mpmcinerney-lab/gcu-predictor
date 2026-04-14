@@ -53,6 +53,7 @@ NUM_CP = len(CP_NAMES)
 def interp_js(ci, el, PR_list=PR):
     """Replicate the JS interp(ci,el) function: linear interpolation
     between the two reference profiles that bracket `el` at checkpoint ci.
+    Alpha is clamped to [0, 1] — no extrapolation beyond the reference profiles.
     Returns a list of predicted cumulative minutes at each checkpoint.
     """
     n = len(PR_list)
@@ -68,6 +69,7 @@ def interp_js(ci, el, PR_list=PR):
                 break
     rng = PR_list[hi][ci] - PR_list[lo][ci]
     a = (el - PR_list[lo][ci]) / rng if rng > 0 else 0.0
+    a = max(0.0, min(1.0, a))  # clamp: never extrapolate beyond reference profiles
     return [PR_list[lo][f] + a * (PR_list[hi][f] - PR_list[lo][f]) for f in range(NUM_CP)]
 
 # --- Weighted interpolation (k-NN / inverse distance) ---
@@ -152,20 +154,27 @@ def densify_pr(PR_list=PR, factor=3):
 def calc_fade_from_entries(entries, interp_fn):
     """entries: list of dicts [{'cp':idx,'min':minutes}, ...]
     interp_fn: function(ci, el) -> profile list
-    Returns fade value (min/hr) computed like the JS code.
+    Returns fade value (min/hr). Applies monotonic clamp to projected finishes
+    and floors the result at 0 to match gcu_model._calc_fade behaviour.
     """
     if len(entries) < 2:
         return 0.0
     preds = []
+    prev_fin = None
     for e in entries:
         profile = interp_fn(e['cp'], e['min'])
-        preds.append({'el': e['min'], 'fin': profile[-1]})
+        fin = profile[-1]
+        if prev_fin is not None and fin < prev_fin:
+            fin = prev_fin
+        prev_fin = fin
+        preds.append({'el': e['min'], 'fin': fin})
     f = preds[0]
     l = preds[-1]
     hrs = (l['el'] - f['el']) / 60.0
     if hrs <= 0:
         return 0.0
-    return ((l['fin'] - f['fin']) / hrs) * 0.5
+    fade = ((l['fin'] - f['fin']) / hrs) * 0.5
+    return max(0.0, fade)
 
 
 def enforce_monotonic_profiles(profiles, eps=1e-6):
