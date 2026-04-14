@@ -416,11 +416,11 @@ function refresh(){
   var fi=document.getElementById('fi');
   if(res&&res._f!=null&&ent.length>=2){
     var f=res._f,cls,txt;
-    if(f<-1){cls='fn';txt='Negative splitting ('+f.toFixed(1)+' min/hr)'}
-    else if(f<=-0.5){cls='fg';txt='Holding steady ('+f.toFixed(1)+' min/hr)'}
-    else if(f<=1){cls='fg';txt='Pacing well ('+f.toFixed(1)+' min/hr)'}
-    else if(f<=2.5){cls='fm';txt='Slight fade ('+f.toFixed(1)+' min/hr)'}
-    else if(f<=4){cls='fm';txt='Moderate fade ('+f.toFixed(1)+' min/hr)'}
+    if(f<-2){cls='fn';txt='Negative splitting ('+f.toFixed(1)+' min/hr)'}
+    else if(f<=-1){cls='fg';txt='Holding steady ('+f.toFixed(1)+' min/hr)'}
+    else if(f<=2){cls='fg';txt='Pacing well ('+f.toFixed(1)+' min/hr)'}
+    else if(f<=5){cls='fm';txt='Mild fade ('+f.toFixed(1)+' min/hr)'}
+    else if(f<=8){cls='fm';txt='Moderate fade ('+f.toFixed(1)+' min/hr)'}
     else{cls='fb';txt='Significant fade ('+f.toFixed(1)+' min/hr)'}
     fi.innerHTML='<span class="fl '+cls+'">'+txt+'</span>';
   }else fi.innerHTML='';
