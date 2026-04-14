@@ -162,15 +162,35 @@ REFERENCE_RUNNERS = [
         [0, 105, 196, 301, 379, 524]
     ),
     ReferenceRunner(
+        "Mark Tait", "9:02:26", "#28 overall",
+        "sportraxs athlete/96152",
+        [0, 111, 213, 322, 401, 542]
+    ),  # ★ NEW
+    ReferenceRunner(
         "Kelly Blair", "9:36:58", "#40 overall",
         "sportraxs athlete/96211",
         [0, 123, 223, 332, 419, 577]
     ),
     ReferenceRunner(
+        "Darryl Munn", "10:14:46", "#72 overall",
+        "sportraxs athlete/96083",
+        [0, 125, 231, 358, 449, 615]
+    ),  # ★ NEW
+    ReferenceRunner(
+        "Jurie Schoeman", "11:09:19", "#101 overall",
+        "sportraxs athlete/96133",
+        [0, 126, 252, 391, 492, 669]
+    ),  # ★ NEW
+    ReferenceRunner(
         "Mary Claire Worrell", "12:19:38", "#132 overall",
         "sportraxs athlete/96153",
         [0, 133, 267, 420, 538, 740]
     ),
+    ReferenceRunner(
+        "Karl Reith", "13:15:47", "#154 overall",
+        "sportraxs athlete/96134",
+        [0, 138, 287, 471, 585, 796]
+    ),  # ★ NEW
     ReferenceRunner(
         "2026 PDF back runner estimate", "14:30:00", "back of pack",
         "GCU Route and Aid Stations.pdf",
