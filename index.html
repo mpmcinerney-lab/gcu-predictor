@@ -264,17 +264,15 @@ function getEnt(){
 
 function calcFade(ent){
   if(ent.length<2)return 0;
-  // Per-pair: accumulate only positive drifts from consecutive checkpoint pairs.
-  // Negative pair drifts (apparent improvement on a segment) contribute 0.
-  // Per-pair comparison avoids a dead zone that a running-max clamp creates:
-  // if the runner improved on segment N then faded on N+1, the fade signal is
-  // measured against checkpoint N's projected finish, not the earliest entry.
+  // Per-pair: sum signed drifts from consecutive checkpoint pairs.
+  // Positive drift = runner's projected finish is later than prior checkpoint implied (fading).
+  // Negative drift = runner's projected finish is earlier than prior checkpoint implied (gaining time).
   var fins=ent.map(function(e){return interp(e.cp,e.min)[CP.length-1]});
   var totalDrift=0;
-  for(var i=0;i<fins.length-1;i++)totalDrift+=Math.max(0,fins[i+1]-fins[i]);
+  for(var i=0;i<fins.length-1;i++)totalDrift+=fins[i+1]-fins[i];
   var hrs=(ent[ent.length-1].min-ent[0].min)/60;
   if(hrs<=0)return 0;
-  return(totalDrift/hrs)*0.5; // dampened; always >= 0
+  return(totalDrift/hrs)*0.5; // dampened; negative = gaining time, positive = fading
 }
 
 function hrMod(fade,ent){
@@ -515,9 +513,25 @@ function refresh(){
   var fi=document.getElementById('fi');
   if(res&&res._f!=null&&ent.length>=2){
     var f=res._f,cls,txt,lc=res._lc;
-    // Fade is always >= 0 (model floors at zero; there is no "negative splitting" signal).
+    var fa=Math.abs(f);
+    // Negative f = gaining time (negative split); positive f = fading.
     // Thresholds vary by checkpoint: early readings carry more interpolation noise.
-    if(lc<=2){
+    if(f<0){
+      // Gaining time — use same magnitude thresholds as the positive (fade) side
+      if(lc<=2){
+        if(fa<=5){cls='fg';txt='Holding steady ('+f.toFixed(1)+' min/hr)'}
+        else if(fa<=15){cls='fg';txt='Gaining time ('+f.toFixed(1)+' min/hr)'}
+        else{cls='fg';txt='Strong negative split ('+f.toFixed(1)+' min/hr)'}
+      }else if(lc===3){
+        if(fa<=3){cls='fg';txt='Holding steady ('+f.toFixed(1)+' min/hr)'}
+        else if(fa<=10){cls='fg';txt='Gaining time ('+f.toFixed(1)+' min/hr)'}
+        else{cls='fg';txt='Strong negative split ('+f.toFixed(1)+' min/hr)'}
+      }else{
+        if(fa<=2){cls='fg';txt='Holding steady ('+f.toFixed(1)+' min/hr)'}
+        else if(fa<=8){cls='fg';txt='Gaining time ('+f.toFixed(1)+' min/hr)'}
+        else{cls='fg';txt='Strong negative split ('+f.toFixed(1)+' min/hr)'}
+      }
+    }else if(lc<=2){
       // Early checkpoints: wide thresholds
       if(f<=5){cls='fg';txt='Holding steady ('+f.toFixed(1)+' min/hr)'}
       else if(f<=15){cls='fm';txt='Mild fade ('+f.toFixed(1)+' min/hr)'}
