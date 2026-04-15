@@ -322,13 +322,13 @@ function predict(){
 
   var last=ent[ent.length-1],base=interp(last.cp,last.min);
   var fade=calcFade(ent);fade=hrMod(fade,ent);fade+=cardDrift(ent);
-  // Cap: fade above 15 min/hr is physically implausible; prevents runaway predictions
-  // when extreme split combinations produce large alpha drifts.
-  fade=Math.min(fade,15);
   var bias=ent.length>=2?tBias(ent):null;
 
   var bFin=base[CP.length-1],rem=bFin-last.min;
-  var totFade=rem>0?fade*(rem/60):0;
+  // Cap only the fade used for finish-time projection. A fade above 15 min/hr
+  // causes runaway totFade for extreme inputs, but the raw fade is preserved in
+  // res._f so the UI label can still show "Significant fade".
+  var totFade=rem>0?Math.min(fade,15)*(rem/60):0;
 
   var res={},cum=last.min;
   for(var f=last.cp+1;f<CP.length;f++){

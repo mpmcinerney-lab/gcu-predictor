@@ -551,18 +551,18 @@ def predict(inp: PredictionInput) -> PredictionResult:
     last_hr = last.get("hr")
     fade = _hr_fade_modifier(fade, inp.max_hr, inp.resting_hr, last_hr)
     fade += _cardiac_drift(entries, inp.max_hr)
-    # Cap: a fade above 15 min/hr is physically implausible for sustained ultra running.
-    # Without this, extreme split combinations (e.g., winner pace at Swiman followed by
-    # back-of-pack Castleburn) produce runaway predictions via total_fade = fade * (remaining/60).
-    fade = min(fade, 15.0)
-
     # --- Layer 3: Terrain bias ---
     bias = _terrain_bias(entries) if len(entries) >= 2 else None
 
     # --- Compute predictions ---
     base_finish = base[-1]
     remaining = base_finish - last["min"]
-    total_fade = fade * (remaining / 60) if remaining > 0 else 0
+    # Cap the fade used for finish-time projection only. A fade above 15 min/hr
+    # would produce runaway predictions (total_fade = fade * remaining/60 grows
+    # explosively for extreme split combinations). The raw fade rate is preserved
+    # for the fade_rate field so the UI label can still show "Significant fade".
+    fade_for_projection = min(fade, 15.0)
+    total_fade = fade_for_projection * (remaining / 60) if remaining > 0 else 0
 
     predictions = {}
     cumulative = last["min"]
