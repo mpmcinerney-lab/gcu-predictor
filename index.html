@@ -264,12 +264,18 @@ function getEnt(){
 
 function calcFade(ent){
   if(ent.length<2)return 0;
-  // Per-pair: sum signed drifts from consecutive checkpoint pairs.
-  // Positive drift = runner's projected finish is later than prior checkpoint implied (fading).
-  // Negative drift = runner's projected finish is earlier than prior checkpoint implied (gaining time).
+  // Fade uses positive-only per-pair accumulation so that a good intermediate segment
+  // doesn't cancel out a subsequent fade (per-pair design prevents dead zones).
+  // Gaining time uses net drift (fins[last]-fins[0]): only report negative when the
+  // runner's projected finish has genuinely improved end-to-end.
   var fins=ent.map(function(e){return interp(e.cp,e.min)[CP.length-1]});
+  var netDrift=fins[fins.length-1]-fins[0];
   var totalDrift=0;
-  for(var i=0;i<fins.length-1;i++)totalDrift+=fins[i+1]-fins[i];
+  if(netDrift<0){
+    totalDrift=netDrift; // overall improvement — preserve negative signal
+  }else{
+    for(var i=0;i<fins.length-1;i++)totalDrift+=Math.max(0,fins[i+1]-fins[i]);
+  }
   var actualHrs=(ent[ent.length-1].min-ent[0].min)/60;
   if(actualHrs<=0)return 0;
   // Cap hrs at the slowest reference profile's elapsed time for the covered span.
