@@ -270,8 +270,13 @@ function calcFade(ent){
   var fins=ent.map(function(e){return interp(e.cp,e.min)[CP.length-1]});
   var totalDrift=0;
   for(var i=0;i<fins.length-1;i++)totalDrift+=fins[i+1]-fins[i];
-  var hrs=(ent[ent.length-1].min-ent[0].min)/60;
-  if(hrs<=0)return 0;
+  var actualHrs=(ent[ent.length-1].min-ent[0].min)/60;
+  if(actualHrs<=0)return 0;
+  // Cap hrs at the slowest reference profile's elapsed time for the covered span.
+  // Prevents f from decreasing when times exceed the reference range: fins is capped
+  // by alpha=1 while actual hrs keeps growing, which would otherwise shrink f back down.
+  var refHrs=(PR[PR.length-1][ent[ent.length-1].cp]-PR[PR.length-1][ent[0].cp])/60;
+  var hrs=refHrs>0?Math.min(actualHrs,refHrs):actualHrs;
   return(totalDrift/hrs)*0.5; // dampened; negative = gaining time, positive = fading
 }
 
