@@ -293,23 +293,13 @@ class PredictionResult:
     finish_range_hi: Optional[float] = None  # pre-race range
 
 
-def _interpolate_profiles(checkpoint_index: int, elapsed_minutes: float) -> list:
+def _linear_bracket_interpolate(checkpoint_index: int, elapsed_minutes: float) -> list:
     """
-    Given a runner's elapsed time at a specific checkpoint, interpolate between
-    the two bracketing reference profiles to predict times at all checkpoints.
-
-    This is the core of the model. Because the reference profiles are from real
-    runners on this specific course, the terrain difficulty is inherently captured
-    in the split ratios — steep scrambles, technical descents, altitude, etc. are
-    all encoded in how long each segment took relative to the whole.
-
-    Alpha is clamped to [0, 1]. Runners faster than the fastest reference profile
-    (alpha < 0) or slower than the slowest (alpha > 1) would require extrapolation
-    beyond calibrated data; clamping returns the nearest boundary profile instead,
-    which is the safest conservative estimate.
-
-    Returns a list of predicted elapsed minutes at each checkpoint [0..5].
+    Linear bracket interpolation between the two neighboring reference profiles,
+    alpha clamped to [0, 1]. Used as a fallback from the weighted-adaptive method
+    and by the pre-race estimator.
     """
+    import math
     n = len(PROFILES)
     ci = checkpoint_index
     lo, hi = 0, 1
@@ -326,10 +316,60 @@ def _interpolate_profiles(checkpoint_index: int, elapsed_minutes: float) -> list
 
     rng = PROFILES[hi][ci] - PROFILES[lo][ci]
     alpha = (elapsed_minutes - PROFILES[lo][ci]) / rng if rng > 0 else 0
-    alpha = max(0.0, min(1.0, alpha))  # clamp: never extrapolate beyond reference profiles
+    alpha = max(0.0, min(1.0, alpha))
 
     return [PROFILES[lo][f] + alpha * (PROFILES[hi][f] - PROFILES[lo][f])
             for f in range(len(CHECKPOINTS))]
+
+
+def _interpolate_profiles(checkpoint_index: int, elapsed_minutes: float) -> list:
+    """
+    Adaptive weighted interpolation using a Gaussian kernel combined with
+    inverse-distance weighting across ALL reference profiles.
+
+    Unlike strict bracket interpolation (which only uses the two neighbors), this
+    lets every profile contribute proportional to how close its split at the given
+    checkpoint is to the runner's actual time. The kernel bandwidth h is the median
+    non-zero distance to the runner, which adapts to the local density of profiles.
+
+    Falls back to linear bracket interpolation if all weights collapse to zero.
+
+    Returns a list of predicted elapsed minutes at each checkpoint [0..5].
+    """
+    import math
+    ci = checkpoint_index
+    dists = sorted(
+        [(abs(PROFILES[idx][ci] - elapsed_minutes), idx) for idx in range(len(PROFILES))],
+        key=lambda x: x[0],
+    )
+
+    # Exact match: return that profile unchanged
+    if dists and dists[0][0] == 0:
+        return list(PROFILES[dists[0][1]])
+
+    nonzero = sorted(d for d, _ in dists if d > 1e-6)
+    if nonzero:
+        mid = len(nonzero) // 2
+        median = (nonzero[mid - 1] + nonzero[mid]) / 2 if len(nonzero) % 2 == 0 else nonzero[mid]
+        h = max(median, 1.0)
+    else:
+        h = 1.0
+
+    weights = []
+    W = 0.0
+    for d, idx in dists:
+        gw = math.exp(-0.5 * (d / h) ** 2)
+        w = gw / ((d + 1e-6) ** 2)
+        weights.append((w, idx))
+        W += w
+
+    if W == 0:
+        return _linear_bracket_interpolate(checkpoint_index, elapsed_minutes)
+
+    return [
+        sum(PROFILES[idx][f] * w for w, idx in weights) / W
+        for f in range(len(CHECKPOINTS))
+    ]
 
 
 def _weather_multiplier(segment_index: int, temperature_c: int, trail_condition: str) -> float:
@@ -361,40 +401,43 @@ def _weather_multiplier(segment_index: int, temperature_c: int, trail_condition:
 
 def _calc_fade(entries: list, profiles_fn=_interpolate_profiles) -> float:
     """
-    Detect pace fade by tracking how the runner's position (alpha) drifts
-    across checkpoints relative to the reference profiles.
+    Detect pace fade (or improvement) by tracking how the runner's projected
+    finish drifts across checkpoints relative to the reference profiles.
 
     Method:
-      1. For each entered checkpoint, compute the raw projected finish (what
-         finish time would be predicted if the runner held that relative position).
-      2. Accumulate only the POSITIVE drift from each consecutive pair of entries.
-         Negative pair drifts (apparent improvement on a segment) are clamped to 0
-         per-pair, preventing spurious "runner is improving" signals.
-      3. Divide total positive drift by total elapsed hours, apply 0.5x dampening.
+      1. Compute projected finish at each entered checkpoint.
+      2. If the NET drift (last - first) is negative, report it as-is — the
+         runner's overall trajectory has improved end-to-end (negative split).
+      3. Otherwise accumulate POSITIVE per-pair drifts only. Per-pair comparison
+         prevents a good intermediate segment from cancelling a subsequent fade.
+      4. Divide drift by elapsed hours, capped at the slowest reference profile's
+         span for the covered checkpoints. Without this cap, actual hours keep
+         growing past the reference range while projected finishes are pinned by
+         alpha=1, which would shrink the reported fade rate toward zero.
+      5. Apply 0.5x dampening.
 
-    Per-pair comparison (not running-max) is critical: a runner who improved on
-    segment N and then faded on segment N+1 should show a fade signal relative to
-    their performance at checkpoint N — not relative to their earliest entry. A
-    running-max clamp would carry the early high baseline forward and create a
-    dead zone where genuine later-segment fading is invisible.
-
-    Returns fade rate in minutes per hour. Positive = slowing. Zero = steady pace.
+    Returns min/hr. Positive = fading. Negative = gaining time. Zero = steady.
     """
     if len(entries) < 2:
         return 0
 
     fins = [profiles_fn(e["cp"], e["min"])[-1] for e in entries]
+    net_drift = fins[-1] - fins[0]
 
-    # Sum positive drifts from consecutive pairs only; negative pairs contribute 0
-    total_positive_drift = sum(
-        max(0.0, fins[i + 1] - fins[i]) for i in range(len(fins) - 1)
-    )
+    if net_drift < 0:
+        total_drift = net_drift  # overall improvement — preserve negative signal
+    else:
+        total_drift = sum(max(0.0, fins[i + 1] - fins[i]) for i in range(len(fins) - 1))
 
-    hours_elapsed = (entries[-1]["min"] - entries[0]["min"]) / 60
-    if hours_elapsed <= 0:
+    actual_hrs = (entries[-1]["min"] - entries[0]["min"]) / 60
+    if actual_hrs <= 0:
         return 0
 
-    return (total_positive_drift / hours_elapsed) * 0.5  # dampened; always >= 0
+    slowest = PROFILES[-1]
+    ref_hrs = (slowest[entries[-1]["cp"]] - slowest[entries[0]["cp"]]) / 60
+    hrs = min(actual_hrs, ref_hrs) if ref_hrs > 0 else actual_hrs
+
+    return (total_drift / hrs) * 0.5
 
 
 def _hr_fade_modifier(fade: float, max_hr: Optional[int], resting_hr: Optional[int],
